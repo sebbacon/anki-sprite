@@ -1,0 +1,28 @@
+services:
+  caddy:
+    image: caddy:alpine
+    ports:
+      - 3000:3000  # Web UI (with basic auth)
+      - 3001:3001  # MCP Server (with basic auth)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./mcp-schema.json:/etc/caddy/mcp-schema.json:ro
+      - ./loading.html:/etc/caddy/loading.html:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - anki-desktop
+
+  anki-desktop:
+    image: mlcivilengineer/anki-desktop-docker:main
+    environment:
+      - PUID=1000
+      - PGID=1000
+      # Uncomment the following lines to enable CJK font support
+      # - DOCKER_MODS=linuxserver/mods:universal-package-install
+      # - INSTALL_PACKAGES=language-pack-zh-hans|fonts-arphic-ukai|fonts-arphic-uming|fonts-ipafont-mincho|fonts-ipafont-gothic|fonts-unfonts-core
+    volumes:
+      - ./anki_data:/config
+    ports:
+      - 8765:8765  # AnkiConnect API (no auth)
+    # Note: port 3000 is now internal-only, accessed via Caddy

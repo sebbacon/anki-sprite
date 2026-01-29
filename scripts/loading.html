@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anki - Starting Up</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+        }
+        .container { text-align: center; padding: 2rem; }
+        .logo { font-size: 4rem; margin-bottom: 1.5rem; }
+        h1 { font-size: 1.8rem; font-weight: 500; margin-bottom: 1rem; }
+        .status { font-size: 1rem; color: #8892b0; margin-bottom: 2rem; }
+        .spinner {
+            width: 50px; height: 50px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top-color: #64ffda;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1.5rem;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .progress-bar {
+            width: 300px; height: 4px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #64ffda, #48bb78);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+        .detail { font-size: 0.85rem; color: #5a6a8a; margin-top: 1.5rem; }
+        .ready .checkmark { display: block; }
+        .ready .spinner { display: none; }
+        .checkmark { display: none; font-size: 3rem; color: #64ffda; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container" id="container">
+        <div class="logo">📚</div>
+        <div class="spinner" id="spinner"></div>
+        <div class="checkmark" id="checkmark">✓</div>
+        <h1 id="title">Anki is starting up...</h1>
+        <p class="status" id="status">Please wait while the application loads</p>
+        <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+        <p class="detail" id="detail">Checking service status...</p>
+    </div>
+    <script>
+        const stages = [
+            { name: 'Initializing Docker...', progress: 20 },
+            { name: 'Starting container...', progress: 40 },
+            { name: 'Loading Anki desktop...', progress: 60 },
+            { name: 'Waiting for AnkiConnect...', progress: 80 },
+            { name: 'Ready!', progress: 100 }
+        ];
+        let currentStage = 0, checkCount = 0;
+        const maxChecks = 120;
+        const progress = document.getElementById('progress');
+        const detail = document.getElementById('detail');
+        const title = document.getElementById('title');
+        const status = document.getElementById('status');
+        const container = document.getElementById('container');
+
+        function updateProgress() {
+            const stageIndex = Math.min(Math.floor(checkCount / 6), stages.length - 2);
+            if (stageIndex > currentStage) currentStage = stageIndex;
+            detail.textContent = stages[currentStage].name;
+            const baseProgress = stages[currentStage].progress - 20;
+            progress.style.width = (baseProgress + Math.min((checkCount % 6) * 3, 18)) + '%';
+        }
+
+        async function checkHealth() {
+            checkCount++;
+            if (checkCount > maxChecks) {
+                detail.textContent = 'Taking longer than expected. Please refresh.';
+                return;
+            }
+            updateProgress();
+            try {
+                const response = await fetch('/startup/health', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'version', version: 6 })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.result) { showReady(); return; }
+                }
+            } catch (e) {}
+            setTimeout(checkHealth, 1000);
+        }
+
+        function showReady() {
+            container.classList.add('ready');
+            title.textContent = 'Anki is ready!';
+            status.textContent = 'Redirecting...';
+            detail.textContent = '';
+            progress.style.width = '100%';
+            setTimeout(() => window.location.reload(), 500);
+        }
+        checkHealth();
+    </script>
+</body>
+</html>
