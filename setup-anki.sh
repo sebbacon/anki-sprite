@@ -149,7 +149,14 @@ sprite-env services create dockerd --cmd /home/sprite/anki/start-dockerd.sh 2>/d
 
 echo ""
 echo "Step 7b: Wait for Docker to be ready..."
-sleep 5
+for i in {1..30}; do
+    if sudo docker ps > /dev/null 2>&1; then
+        echo "Docker is ready"
+        break
+    fi
+    echo "Waiting for Docker daemon... ($i/30)"
+    sleep 1
+done
 
 echo ""
 echo "Step 7c: Pull Anki Docker image..."

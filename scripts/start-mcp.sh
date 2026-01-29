@@ -8,6 +8,19 @@ cd /home/sprite/anki-mcp-server
 export NVM_DIR="/.sprite/languages/node/nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
+# Wait for AnkiConnect to be available
+echo "Waiting for AnkiConnect..."
+for i in {1..60}; do
+    if curl -sf -X POST http://localhost:8765 \
+        -H "Content-Type: application/json" \
+        -d '{"action":"version","version":6}' | grep -q '"result"'; then
+        echo "AnkiConnect is ready"
+        break
+    fi
+    echo "Waiting for AnkiConnect... ($i/60)"
+    sleep 1
+done
+
 # Run supergateway wrapping the anki-mcp-server
 exec npx supergateway \
     --stdio "node dist/index.js" \

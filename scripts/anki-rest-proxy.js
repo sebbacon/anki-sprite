@@ -119,7 +119,31 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Anki REST API proxy listening on port ${PORT}`);
-  console.log(`OpenAPI spec available at http://localhost:${PORT}/openapi.json`);
+async function waitForAnkiConnect(maxAttempts = 60, intervalMs = 1000) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const result = await callAnkiConnect('version');
+      if (result.result) {
+        console.log('AnkiConnect is ready');
+        return true;
+      }
+    } catch (e) {
+      console.log(`Waiting for AnkiConnect... (${i + 1}/${maxAttempts})`);
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error('AnkiConnect did not become available');
+}
+
+async function startup() {
+  await waitForAnkiConnect();
+  server.listen(PORT, () => {
+    console.log(`Anki REST API proxy listening on port ${PORT}`);
+    console.log(`OpenAPI spec available at http://localhost:${PORT}/openapi.json`);
+  });
+}
+
+startup().catch(err => {
+  console.error('Failed to start:', err.message);
+  process.exit(1);
 });

@@ -59,13 +59,15 @@
     </div>
     <script>
         const stages = [
-            { name: 'Initializing Docker...', progress: 20 },
-            { name: 'Starting container...', progress: 40 },
-            { name: 'Loading Anki desktop...', progress: 60 },
-            { name: 'Waiting for AnkiConnect...', progress: 80 },
+            { name: 'Initializing Docker...', progress: 15 },
+            { name: 'Starting container...', progress: 30 },
+            { name: 'Loading Anki desktop...', progress: 45 },
+            { name: 'Checking AnkiConnect...', progress: 60 },
+            { name: 'Checking REST API...', progress: 75 },
+            { name: 'Checking MCP Server...', progress: 90 },
             { name: 'Ready!', progress: 100 }
         ];
-        let currentStage = 0, checkCount = 0;
+        let checkCount = 0;
         const maxChecks = 120;
         const progress = document.getElementById('progress');
         const detail = document.getElementById('detail');
@@ -73,21 +75,19 @@
         const status = document.getElementById('status');
         const container = document.getElementById('container');
 
-        function updateProgress() {
-            const stageIndex = Math.min(Math.floor(checkCount / 6), stages.length - 2);
-            if (stageIndex > currentStage) currentStage = stageIndex;
-            detail.textContent = stages[currentStage].name;
-            const baseProgress = stages[currentStage].progress - 20;
-            progress.style.width = (baseProgress + Math.min((checkCount % 6) * 3, 18)) + '%';
+        // Track which services are ready
+        const serviceStatus = {
+            ankiConnect: false,
+            restApi: false,
+            mcpServer: false
+        };
+
+        function updateStage(stageName, progressPercent) {
+            detail.textContent = stageName;
+            progress.style.width = progressPercent + '%';
         }
 
-        async function checkHealth() {
-            checkCount++;
-            if (checkCount > maxChecks) {
-                detail.textContent = 'Taking longer than expected. Please refresh.';
-                return;
-            }
-            updateProgress();
+        async function checkAnkiConnect() {
             try {
                 const response = await fetch('/startup/health', {
                     method: 'POST',
@@ -96,10 +96,84 @@
                 });
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.result) { showReady(); return; }
+                    if (data.result) return true;
                 }
             } catch (e) {}
-            setTimeout(checkHealth, 1000);
+            return false;
+        }
+
+        async function checkRestApi() {
+            try {
+                const response = await fetch('/anki-api/health');
+                if (response.ok) return true;
+            } catch (e) {}
+            return false;
+        }
+
+        async function checkMcpServer() {
+            try {
+                const response = await fetch('/mcp/health');
+                if (response.ok) return true;
+            } catch (e) {}
+            return false;
+        }
+
+        async function checkHealth() {
+            checkCount++;
+            if (checkCount > maxChecks) {
+                detail.textContent = 'Taking longer than expected. Please refresh.';
+                return;
+            }
+
+            // Simulate early stages based on check count
+            if (checkCount <= 3) {
+                updateStage(stages[0].name, stages[0].progress);
+                setTimeout(checkHealth, 1000);
+                return;
+            }
+            if (checkCount <= 6) {
+                updateStage(stages[1].name, stages[1].progress);
+                setTimeout(checkHealth, 1000);
+                return;
+            }
+            if (checkCount <= 9) {
+                updateStage(stages[2].name, stages[2].progress);
+                setTimeout(checkHealth, 1000);
+                return;
+            }
+
+            // Check AnkiConnect first
+            if (!serviceStatus.ankiConnect) {
+                updateStage(stages[3].name, stages[3].progress);
+                serviceStatus.ankiConnect = await checkAnkiConnect();
+                if (!serviceStatus.ankiConnect) {
+                    setTimeout(checkHealth, 1000);
+                    return;
+                }
+            }
+
+            // Check REST API
+            if (!serviceStatus.restApi) {
+                updateStage(stages[4].name, stages[4].progress);
+                serviceStatus.restApi = await checkRestApi();
+                if (!serviceStatus.restApi) {
+                    setTimeout(checkHealth, 1000);
+                    return;
+                }
+            }
+
+            // Check MCP Server
+            if (!serviceStatus.mcpServer) {
+                updateStage(stages[5].name, stages[5].progress);
+                serviceStatus.mcpServer = await checkMcpServer();
+                if (!serviceStatus.mcpServer) {
+                    setTimeout(checkHealth, 1000);
+                    return;
+                }
+            }
+
+            // All services ready
+            showReady();
         }
 
         function showReady() {
