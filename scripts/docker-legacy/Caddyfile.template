@@ -43,7 +43,7 @@
         # Browser/UI requests get friendly loading page
         @ui_startup expression {err.status_code} in [502, 503, 504]
         handle @ui_startup {
-            root * /home/sprite/anki
+            root * /etc/caddy
             rewrite * /loading.html
             file_server
         }
@@ -54,19 +54,19 @@
 
     # Startup health check - proxies to AnkiConnect to verify Anki is fully loaded
     handle /startup/health {
-        reverse_proxy localhost:8765
+        reverse_proxy anki-desktop:8765
     }
 
     # Startup loading page - can be accessed directly for testing
     handle /startup/loading {
-        root * /home/sprite/anki
+        root * /etc/caddy
         rewrite * /loading.html
         file_server
     }
 
     # MCP schema endpoint (static file)
     handle /mcp/schema.json {
-        root * /home/sprite/anki
+        root * /etc/caddy
         rewrite * /mcp-schema.json
         file_server
     }
@@ -74,18 +74,18 @@
     # MCP Server endpoints (SSE transport)
     handle /mcp/* {
         uri strip_prefix /mcp
-        reverse_proxy localhost:8766
+        reverse_proxy host.docker.internal:8766
     }
 
     # Anki REST API (OpenAPI-compatible for ChatGPT)
     handle /anki-api/* {
         uri strip_prefix /anki-api
-        reverse_proxy localhost:8767
+        reverse_proxy host.docker.internal:8767
     }
 
-    # noVNC web interface (default)
+    # Anki Desktop UI (default)
     handle {
-        reverse_proxy localhost:6080
+        reverse_proxy anki-desktop:3000
     }
 }
 
@@ -99,5 +99,5 @@
         ${ANKI_AUTH_USERNAME} ${ANKI_AUTH_PASSWORD_HASH}
     }
 
-    reverse_proxy localhost:8766
+    reverse_proxy host.docker.internal:8766
 }

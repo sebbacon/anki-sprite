@@ -1,6 +1,6 @@
 #!/bin/bash
-# Anki Docker Setup Script
-# This script sets up the complete Anki Docker environment with Sprite services
+# Anki Native Setup Script
+# This script sets up Anki natively (without Docker) with VNC access and all supporting services
 # Run with: bash setup-anki.sh
 #
 # Configuration files are stored in the scripts/ folder for better maintainability.
@@ -8,8 +8,14 @@
 
 set -e
 
-echo "=== Anki Docker Setup ==="
+echo "=== Anki Native Setup ==="
 echo ""
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+ANKI_VERSION="${ANKI_VERSION:-25.02.4}"
 
 # ============================================================================
 # Step 0: Load Environment Variables
@@ -47,98 +53,218 @@ echo "Environment variables loaded successfully."
 echo ""
 
 # ============================================================================
-# Step 1: System Setup
+# Step 1: System Setup - Install Dependencies
 # ============================================================================
 
 echo "Step 1: Update system packages and install dependencies..."
 sudo apt update
-sudo apt install -y gettext-base
+sudo apt install -y \
+    gettext-base \
+    wget \
+    zstd \
+    xdg-utils \
+    libxcb-xinerama0 \
+    libxcb-cursor0 \
+    python3-xdg \
+    lame \
+    mplayer \
+    tigervnc-standalone-server \
+    tigervnc-common \
+    openbox \
+    xterm \
+    dbus-x11 \
+    x11-xkb-utils \
+    xfonts-base \
+    locales \
+    curl \
+    git \
+    libxkbcommon0 \
+    libxcb-keysyms1 \
+    libxcb-render-util0 \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libegl1 \
+    libopengl0 \
+    libgl1 \
+    fontconfig \
+    fonts-dejavu-core \
+    novnc \
+    websockify \
+    netcat-openbsd \
+    libnss3 \
+    libxkbcommon-x11-0 \
+    libxcb-shape0
+
+# Ensure locale is set
+sudo locale-gen en_US.UTF-8
 
 echo ""
-echo "Step 2: Install Docker..."
-if ! command -v docker &> /dev/null; then
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    rm get-docker.sh
-else
-    echo "Docker already installed, skipping..."
-fi
 
-echo ""
-echo "Step 3: Add current user to docker group..."
-CURRENT_USER="$(whoami)"
-if groups "$CURRENT_USER" | grep -q '\bdocker\b'; then
-    echo "User $CURRENT_USER already in docker group, skipping..."
-else
-    sudo usermod -aG docker "$CURRENT_USER"
-    echo "User $CURRENT_USER added to docker group (re-login required to take effect)"
-fi
+# ============================================================================
+# Step 2: Fix home directory ownership and create working directories
+# ============================================================================
 
-echo ""
-echo "Step 4: Fix home directory ownership and create Anki working directory..."
+echo "Step 2: Fix home directory ownership and create Anki working directory..."
 # On fresh Sprites, /home/sprite may be owned by ubuntu - fix this
-# Only fix the home directory itself, not recursively (which can hang on large directories)
 if [ -d /home/sprite ]; then
     sudo chown sprite:sprite /home/sprite
 fi
 mkdir -p ~/anki
+mkdir -p ~/anki/anki_data/.local/share/Anki2
+mkdir -p ~/.vnc
+mkdir -p ~/.config/openbox
+
+# ============================================================================
+# Step 3: Install Anki
+# ============================================================================
+
+echo ""
+echo "Step 3: Install Anki ${ANKI_VERSION}..."
+
+if command -v anki &> /dev/null; then
+    echo "Anki is already installed, checking version..."
+    INSTALLED_VERSION=$(anki --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo "unknown")
+    echo "Installed version: ${INSTALLED_VERSION}"
+else
+    echo "Downloading Anki ${ANKI_VERSION}..."
+    cd /tmp
+
+    # Download the Anki launcher
+    wget -q "https://github.com/ankitects/anki/releases/download/${ANKI_VERSION}/anki-launcher-${ANKI_VERSION}-linux.tar.zst" \
+        || wget -q "https://github.com/ankitects/anki/releases/download/${ANKI_VERSION}/anki-${ANKI_VERSION}-linux-qt6.tar.zst"
+
+    # Extract and install
+    if [ -f "anki-launcher-${ANKI_VERSION}-linux.tar.zst" ]; then
+        tar --use-compress-program=unzstd -xf "anki-launcher-${ANKI_VERSION}-linux.tar.zst"
+        cd "anki-launcher-${ANKI_VERSION}-linux"
+    else
+        tar --use-compress-program=unzstd -xf "anki-${ANKI_VERSION}-linux-qt6.tar.zst"
+        cd "anki-${ANKI_VERSION}-linux-qt6"
+    fi
+
+    sudo ./install.sh
+
+    # Cleanup
+    cd /tmp
+    rm -rf anki-launcher-${ANKI_VERSION}-linux* anki-${ANKI_VERSION}-linux*
+
+    echo "Anki installed successfully."
+fi
+
 cd ~/anki
 
 # ============================================================================
-# Step 4a: Start Docker daemon (needed before we can use Docker)
+# Step 4: Install Caddy
 # ============================================================================
 
 echo ""
-echo "Step 4a: Copying Docker daemon wrapper script..."
-cp "${SCRIPTS_DIR}/start-dockerd.sh" ~/anki/start-dockerd.sh
-chmod +x ~/anki/start-dockerd.sh
+echo "Step 4: Install Caddy..."
 
-echo ""
-echo "Step 4b: Create Sprite service for Docker daemon..."
-if sprite-env services list | grep -q '^dockerd\b'; then
-    echo "Service dockerd already exists, skipping..."
+if command -v caddy &> /dev/null; then
+    echo "Caddy is already installed, skipping..."
 else
-    sprite-env services create dockerd --cmd /home/sprite/anki/start-dockerd.sh
+    echo "Installing Caddy..."
+    sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+    sudo apt update
+    sudo apt install -y caddy
+    # Stop the default caddy service - we'll manage it ourselves
+    sudo systemctl stop caddy || true
+    sudo systemctl disable caddy || true
+    echo "Caddy installed successfully."
 fi
 
-echo ""
-echo "Step 4c: Wait for Docker to be ready..."
-for i in {1..30}; do
-    if sudo docker ps > /dev/null 2>&1; then
-        echo "Docker is ready"
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo "ERROR: Docker daemon failed to start after 30 seconds"
-        exit 1
-    fi
-    echo "Waiting for Docker daemon... ($i/30)"
-    sleep 1
-done
-
 # ============================================================================
-# Step 4d: Generate password hash from plaintext password
+# Step 5: Generate password hash
 # ============================================================================
 
 echo ""
-echo "Step 4d: Generating bcrypt hash for password..."
-# Pull caddy image first so we can use it to generate the hash
-sudo docker pull caddy:alpine
-
-# Generate bcrypt hash using caddy (escaping special characters for shell)
-ANKI_AUTH_PASSWORD_HASH=$(sudo docker run --rm caddy:alpine caddy hash-password --plaintext "${ANKI_AUTH_PASSWORD}")
+echo "Step 5: Generating bcrypt hash for password..."
+ANKI_AUTH_PASSWORD_HASH=$(caddy hash-password --plaintext "${ANKI_AUTH_PASSWORD}")
 echo "Password hash generated successfully."
 
 # ============================================================================
-# Step 5: Copy Configuration Files
+# Step 6: Configure VNC
 # ============================================================================
 
 echo ""
-echo "Step 5a: Copying docker-compose.yml..."
-cp "${SCRIPTS_DIR}/docker-compose.yml" ~/anki/docker-compose.yml
+echo "Step 6: Configure VNC server..."
+
+# Create VNC password (using a fixed password since auth is handled by Caddy)
+# Use printf with newlines to provide password and confirmation non-interactively
+printf "ankivnc\nankivnc\n" | vncpasswd > /dev/null 2>&1 || true
+chmod 600 ~/.vnc/passwd 2>/dev/null || true
+
+# Create VNC xstartup script
+cat > ~/.vnc/xstartup << 'XSTARTUP'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+
+# Start dbus
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax)
+fi
+
+# Set keyboard layout
+setxkbmap -layout us &
+
+# Environment for Anki
+export DISABLE_QT5_COMPAT=1
+export LC_ALL=en_US.UTF-8
+export XDG_DATA_HOME="$HOME/anki/anki_data/.local/share"
+export XDG_CONFIG_HOME="$HOME/anki/anki_data/.config"
+export XDG_RUNTIME_DIR="/tmp/runtime-sprite"
+export QTWEBENGINE_DISABLE_SANDBOX=1
+export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu"
+
+mkdir -p "$XDG_RUNTIME_DIR"
+
+# Start openbox window manager
+openbox &
+
+# Wait a moment for window manager to start
+sleep 2
+
+# Start Anki
+anki &
+
+# Keep the session alive
+wait
+XSTARTUP
+chmod +x ~/.vnc/xstartup
+
+# Create openbox autostart (this is what actually runs when VNC starts)
+cat > ~/.config/openbox/autostart << 'AUTOSTART'
+# Set keyboard layout
+setxkbmap -layout us &
+
+# Environment for Anki
+export DISABLE_QT5_COMPAT=1
+export LC_ALL=en_US.UTF-8
+export XDG_DATA_HOME="$HOME/anki/anki_data/.local/share"
+export XDG_CONFIG_HOME="$HOME/anki/anki_data/.config"
+export XDG_RUNTIME_DIR="/tmp/runtime-sprite"
+export QTWEBENGINE_DISABLE_SANDBOX=1
+export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu"
+
+mkdir -p "$XDG_RUNTIME_DIR"
+
+# Wait for window manager to be ready, then start Anki
+sleep 2
+anki &
+AUTOSTART
+chmod +x ~/.config/openbox/autostart
+
+echo "VNC configuration complete."
+
+# ============================================================================
+# Step 7: Copy Configuration Files
+# ============================================================================
 
 echo ""
-echo "Step 5b: Generating Caddyfile from template..."
+echo "Step 7a: Generating Caddyfile from template..."
 # Use envsubst to substitute environment variables in the template
 export ANKI_AUTH_USERNAME ANKI_AUTH_PASSWORD_HASH ANKI_API_KEY
 envsubst '${ANKI_AUTH_USERNAME} ${ANKI_AUTH_PASSWORD_HASH} ${ANKI_API_KEY}' \
@@ -146,60 +272,35 @@ envsubst '${ANKI_AUTH_USERNAME} ${ANKI_AUTH_PASSWORD_HASH} ${ANKI_API_KEY}' \
     > ~/anki/Caddyfile
 
 echo ""
-echo "Step 5c: Copying startup loading page..."
+echo "Step 7b: Copying startup loading page..."
 cp "${SCRIPTS_DIR}/loading.html" ~/anki/loading.html
 
 echo ""
-echo "Step 5d: Copying MCP schema file..."
+echo "Step 7c: Copying MCP schema file..."
 cp "${SCRIPTS_DIR}/mcp-schema.json" ~/anki/mcp-schema.json
 
 echo ""
-echo "Step 5e: Copying OpenAPI spec for REST API..."
+echo "Step 7d: Copying OpenAPI spec for REST API..."
 cp "${SCRIPTS_DIR}/openapi-anki.json" ~/anki/openapi-anki.json
 
 echo ""
-echo "Step 5f: Copying REST API proxy..."
+echo "Step 7e: Copying REST API proxy..."
 cp "${SCRIPTS_DIR}/anki-rest-proxy.js" ~/anki/anki-rest-proxy.js
 chmod +x ~/anki/anki-rest-proxy.js
 
 echo ""
-echo "Step 5g: Copying REST API startup script..."
+echo "Step 7f: Copying startup scripts..."
 cp "${SCRIPTS_DIR}/start-rest-proxy.sh" ~/anki/start-rest-proxy.sh
 chmod +x ~/anki/start-rest-proxy.sh
 
-# ============================================================================
-# Step 6: Create Sprite Service Scripts
-# ============================================================================
+cp "${SCRIPTS_DIR}/start-anki-native.sh" ~/anki/start-anki-native.sh
+chmod +x ~/anki/start-anki-native.sh
 
-echo ""
-echo "Step 6: Copying Anki management script..."
-cp "${SCRIPTS_DIR}/manage-anki.sh" ~/anki/manage-anki.sh
-chmod +x ~/anki/manage-anki.sh
+cp "${SCRIPTS_DIR}/start-caddy.sh" ~/anki/start-caddy.sh
+chmod +x ~/anki/start-caddy.sh
 
-# ============================================================================
-# Step 7: Start Anki Services
-# ============================================================================
-
-echo ""
-echo "Step 7a: Pull Anki Docker image..."
-cd ~/anki
-sudo docker compose pull
-
-echo ""
-echo "Step 7b: Create Anki data directory..."
-mkdir -p ~/anki/anki_data
-
-echo ""
-echo "Step 7c: Start Anki container..."
-sudo docker compose up -d
-
-echo ""
-echo "Step 7d: Create Sprite service for Anki with HTTP port..."
-if sprite-env services list | grep -q '^anki\b'; then
-    echo "Service anki already exists, skipping..."
-else
-    sprite-env services create anki --cmd /home/sprite/anki/manage-anki.sh --needs dockerd --http-port 3000
-fi
+cp "${SCRIPTS_DIR}/start-novnc.sh" ~/anki/start-novnc.sh
+chmod +x ~/anki/start-novnc.sh
 
 # ============================================================================
 # Step 8: Install AnkiConnect Addon
@@ -219,15 +320,41 @@ if [ -d /tmp/anki-connect/plugin ]; then
     cp -r /tmp/anki-connect/plugin/* ~/anki/anki_data/.local/share/Anki2/addons21/2055492159/
 fi
 cp "${SCRIPTS_DIR}/ankiconnect-config.json" ~/anki/anki_data/.local/share/Anki2/addons21/2055492159/config.json
-# Set ownership to match Docker container's PUID/PGID (1000:1000)
-sudo chown -R 1000:1000 ~/anki/anki_data/
 
 # ============================================================================
-# Step 9: Set up Anki MCP Server
+# Step 9: Create Sprite Services
 # ============================================================================
 
 echo ""
-echo "Step 9a: Set up Anki MCP Server..."
+echo "Step 9a: Create Sprite service for Anki (VNC)..."
+if sprite-env services list | grep -q '^anki\b'; then
+    echo "Service anki already exists, skipping..."
+else
+    sprite-env services create anki --cmd /home/sprite/anki/start-anki-native.sh
+fi
+
+echo ""
+echo "Step 9b: Create Sprite service for noVNC web interface..."
+if sprite-env services list | grep -q '^anki-novnc\b'; then
+    echo "Service anki-novnc already exists, skipping..."
+else
+    sprite-env services create anki-novnc --cmd /home/sprite/anki/start-novnc.sh --needs anki
+fi
+
+echo ""
+echo "Step 9c: Create Sprite service for Caddy reverse proxy..."
+if sprite-env services list | grep -q '^anki-caddy\b'; then
+    echo "Service anki-caddy already exists, skipping..."
+else
+    sprite-env services create anki-caddy --cmd /home/sprite/anki/start-caddy.sh --needs anki-novnc --http-port 3000
+fi
+
+# ============================================================================
+# Step 10: Set up Anki MCP Server
+# ============================================================================
+
+echo ""
+echo "Step 10a: Set up Anki MCP Server..."
 if [ ! -d ~/anki-mcp-server ]; then
     git clone https://github.com/sebbacon/anki-mcp-server.git ~/anki-mcp-server
 fi
@@ -236,16 +363,16 @@ npm install
 npm run build
 
 echo ""
-echo "Step 9b: Install supergateway for MCP HTTP transport..."
+echo "Step 10b: Install supergateway for MCP HTTP transport..."
 npm install -g supergateway
 
 echo ""
-echo "Step 9c: Copying MCP server startup script..."
+echo "Step 10c: Copying MCP server startup script..."
 cp "${SCRIPTS_DIR}/start-mcp.sh" ~/anki-mcp-server/start-mcp.sh
 chmod +x ~/anki-mcp-server/start-mcp.sh
 
 echo ""
-echo "Step 9d: Create Sprite service for MCP server..."
+echo "Step 10d: Create Sprite service for MCP server..."
 if sprite-env services list | grep -q '^anki-mcp\b'; then
     echo "Service anki-mcp already exists, skipping..."
 else
@@ -253,25 +380,16 @@ else
 fi
 
 # ============================================================================
-# Step 10: Set up REST API Service
+# Step 11: Set up REST API Service
 # ============================================================================
 
 echo ""
-echo "Step 10: Create Sprite service for REST API..."
+echo "Step 11: Create Sprite service for REST API..."
 if sprite-env services list | grep -q '^anki-rest\b'; then
     echo "Service anki-rest already exists, skipping..."
 else
     sprite-env services create anki-rest --cmd /home/sprite/anki/start-rest-proxy.sh --needs anki
 fi
-
-# ============================================================================
-# Step 11: Final Restart
-# ============================================================================
-
-echo ""
-echo "Step 11: Restart Anki container to load AnkiConnect..."
-cd ~/anki
-sudo docker compose restart
 
 # ============================================================================
 # Step 12: Copy Helper Scripts
@@ -291,7 +409,12 @@ chmod +x ~/anki/start-anki.sh ~/anki/stop-anki.sh ~/anki/status-anki.sh
 echo ""
 echo "=== Setup Complete ==="
 echo ""
-echo "Anki is now running and accessible on:"
+echo "Anki is now configured and ready to start."
+echo ""
+echo "To start all services:"
+echo "  sprite-env services start anki"
+echo ""
+echo "Once started, Anki will be accessible on:"
 echo "  - Local: http://localhost:3000"
 echo "  - Via Sprite URL: (check your Sprite dashboard)"
 echo ""
@@ -309,8 +432,9 @@ echo "  - REST API: /anki-api/deckNames, /anki-api/addNote, etc."
 echo "  - OpenAPI spec: /anki-api/openapi.json"
 echo ""
 echo "Service management:"
-echo "  sprite-env services list              # List all services"
-echo "  sprite-env services restart anki      # Restart Anki"
-echo "  sprite-env services restart anki-mcp  # Restart MCP server"
-echo "  sprite-env services restart anki-rest # Restart REST API"
+echo "  sprite-env services list               # List all services"
+echo "  sprite-env services restart anki       # Restart Anki"
+echo "  sprite-env services restart anki-mcp   # Restart MCP server"
+echo "  sprite-env services restart anki-rest  # Restart REST API"
+echo "  sprite-env services restart anki-caddy # Restart Caddy proxy"
 echo ""
