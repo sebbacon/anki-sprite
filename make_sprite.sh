@@ -29,11 +29,24 @@ echo ""
 # 1. Create a new sprite
 sprite create "${SPRITE_NAME}" -skip-console
 
-# 2. Upload .env and setup script, then run the setup
-sprite exec -s "${SPRITE_NAME}" \
-    -file "${SCRIPT_DIR}/.env:/home/sprite/.env" \
-    -file "${SCRIPT_DIR}/setup-anki.sh:/home/sprite/setup-anki.sh" \
-    -- bash /home/sprite/setup-anki.sh
+# Wait for sprite to be ready
+echo "Waiting for sprite to be ready..."
+sleep 2
+
+# 2. Build file upload arguments for all scripts
+FILE_ARGS="-file ${SCRIPT_DIR}/.env:/home/sprite/.env"
+FILE_ARGS="$FILE_ARGS -file ${SCRIPT_DIR}/setup-anki.sh:/home/sprite/setup-anki.sh"
+
+# Add each file from scripts directory individually
+for file in "${SCRIPT_DIR}/scripts/"*; do
+    if [ -f "$file" ]; then
+        filename=$(basename "$file")
+        FILE_ARGS="$FILE_ARGS -file ${file}:/home/sprite/scripts/${filename}"
+    fi
+done
+
+# Upload files and run setup
+eval sprite exec -s "${SPRITE_NAME}" $FILE_ARGS -- bash /home/sprite/setup-anki.sh
 
 # 3. Make URL publicly accessible (with basic auth protection)
 sprite url update -s "${SPRITE_NAME}" --auth public

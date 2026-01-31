@@ -50,8 +50,9 @@ echo ""
 # Step 1: System Setup
 # ============================================================================
 
-echo "Step 1: Update system packages..."
+echo "Step 1: Update system packages and install dependencies..."
 sudo apt update
+sudo apt install -y gettext-base
 
 echo ""
 echo "Step 2: Install Docker..."
@@ -65,21 +66,62 @@ fi
 
 echo ""
 echo "Step 3: Add current user to docker group..."
-sudo usermod -aG docker $USER || true
+CURRENT_USER="$(whoami)"
+if groups "$CURRENT_USER" | grep -q '\bdocker\b'; then
+    echo "User $CURRENT_USER already in docker group, skipping..."
+else
+    sudo usermod -aG docker "$CURRENT_USER"
+    echo "User $CURRENT_USER added to docker group (re-login required to take effect)"
+fi
 
 echo ""
 echo "Step 4: Fix home directory ownership and create Anki working directory..."
 # On fresh Sprites, /home/sprite may be owned by ubuntu - fix this
-sudo chown -R sprite:sprite /home/sprite 2>/dev/null || true
+# Only fix the home directory itself, not recursively (which can hang on large directories)
+if [ -d /home/sprite ]; then
+    sudo chown sprite:sprite /home/sprite
+fi
 mkdir -p ~/anki
 cd ~/anki
 
 # ============================================================================
-# Step 4b: Generate password hash from plaintext password
+# Step 4a: Start Docker daemon (needed before we can use Docker)
 # ============================================================================
 
 echo ""
-echo "Step 4b: Generating bcrypt hash for password..."
+echo "Step 4a: Copying Docker daemon wrapper script..."
+cp "${SCRIPTS_DIR}/start-dockerd.sh" ~/anki/start-dockerd.sh
+chmod +x ~/anki/start-dockerd.sh
+
+echo ""
+echo "Step 4b: Create Sprite service for Docker daemon..."
+if sprite-env services list | grep -q '^dockerd\b'; then
+    echo "Service dockerd already exists, skipping..."
+else
+    sprite-env services create dockerd --cmd /home/sprite/anki/start-dockerd.sh
+fi
+
+echo ""
+echo "Step 4c: Wait for Docker to be ready..."
+for i in {1..30}; do
+    if sudo docker ps > /dev/null 2>&1; then
+        echo "Docker is ready"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "ERROR: Docker daemon failed to start after 30 seconds"
+        exit 1
+    fi
+    echo "Waiting for Docker daemon... ($i/30)"
+    sleep 1
+done
+
+# ============================================================================
+# Step 4d: Generate password hash from plaintext password
+# ============================================================================
+
+echo ""
+echo "Step 4d: Generating bcrypt hash for password..."
 # Pull caddy image first so we can use it to generate the hash
 sudo docker pull caddy:alpine
 
@@ -130,50 +172,34 @@ chmod +x ~/anki/start-rest-proxy.sh
 # ============================================================================
 
 echo ""
-echo "Step 6a: Copying Docker daemon wrapper script..."
-cp "${SCRIPTS_DIR}/start-dockerd.sh" ~/anki/start-dockerd.sh
-chmod +x ~/anki/start-dockerd.sh
-
-echo ""
-echo "Step 6b: Copying Anki management script..."
+echo "Step 6: Copying Anki management script..."
 cp "${SCRIPTS_DIR}/manage-anki.sh" ~/anki/manage-anki.sh
 chmod +x ~/anki/manage-anki.sh
 
 # ============================================================================
-# Step 7: Create Sprite Services
+# Step 7: Start Anki Services
 # ============================================================================
 
 echo ""
-echo "Step 7a: Create Sprite service for Docker daemon..."
-sprite-env services create dockerd --cmd /home/sprite/anki/start-dockerd.sh 2>/dev/null || echo "Service dockerd may already exist"
-
-echo ""
-echo "Step 7b: Wait for Docker to be ready..."
-for i in {1..30}; do
-    if sudo docker ps > /dev/null 2>&1; then
-        echo "Docker is ready"
-        break
-    fi
-    echo "Waiting for Docker daemon... ($i/30)"
-    sleep 1
-done
-
-echo ""
-echo "Step 7c: Pull Anki Docker image..."
+echo "Step 7a: Pull Anki Docker image..."
 cd ~/anki
 sudo docker compose pull
 
 echo ""
-echo "Step 7d: Create Anki data directory..."
+echo "Step 7b: Create Anki data directory..."
 mkdir -p ~/anki/anki_data
 
 echo ""
-echo "Step 7e: Start Anki container..."
+echo "Step 7c: Start Anki container..."
 sudo docker compose up -d
 
 echo ""
-echo "Step 7f: Create Sprite service for Anki with HTTP port..."
-sprite-env services create anki --cmd /home/sprite/anki/manage-anki.sh --needs dockerd --http-port 3000 2>/dev/null || echo "Service anki may already exist"
+echo "Step 7d: Create Sprite service for Anki with HTTP port..."
+if sprite-env services list | grep -q '^anki\b'; then
+    echo "Service anki already exists, skipping..."
+else
+    sprite-env services create anki --cmd /home/sprite/anki/manage-anki.sh --needs dockerd --http-port 3000
+fi
 
 # ============================================================================
 # Step 8: Install AnkiConnect Addon
@@ -183,13 +209,18 @@ echo ""
 echo "Step 8: Install AnkiConnect addon..."
 mkdir -p ~/anki/anki_data/.local/share/Anki2/addons21/2055492159
 if [ ! -d /tmp/anki-connect ]; then
-    git clone https://github.com/FooSoft/anki-connect.git /tmp/anki-connect 2>/dev/null || true
+    echo "Cloning AnkiConnect repository..."
+    if ! git clone https://github.com/FooSoft/anki-connect.git /tmp/anki-connect; then
+        echo "ERROR: Failed to clone AnkiConnect repository"
+        exit 1
+    fi
 fi
 if [ -d /tmp/anki-connect/plugin ]; then
     cp -r /tmp/anki-connect/plugin/* ~/anki/anki_data/.local/share/Anki2/addons21/2055492159/
 fi
 cp "${SCRIPTS_DIR}/ankiconnect-config.json" ~/anki/anki_data/.local/share/Anki2/addons21/2055492159/config.json
-sudo chown -R sprite:sprite ~/anki/anki_data/.local/share/Anki2/addons21/ 2>/dev/null || true
+# Set ownership to match Docker container's PUID/PGID (1000:1000)
+sudo chown -R 1000:1000 ~/anki/anki_data/
 
 # ============================================================================
 # Step 9: Set up Anki MCP Server
@@ -215,7 +246,11 @@ chmod +x ~/anki-mcp-server/start-mcp.sh
 
 echo ""
 echo "Step 9d: Create Sprite service for MCP server..."
-sprite-env services create anki-mcp --cmd /home/sprite/anki-mcp-server/start-mcp.sh --needs anki 2>/dev/null || echo "Service anki-mcp may already exist"
+if sprite-env services list | grep -q '^anki-mcp\b'; then
+    echo "Service anki-mcp already exists, skipping..."
+else
+    sprite-env services create anki-mcp --cmd /home/sprite/anki-mcp-server/start-mcp.sh --needs anki
+fi
 
 # ============================================================================
 # Step 10: Set up REST API Service
@@ -223,7 +258,11 @@ sprite-env services create anki-mcp --cmd /home/sprite/anki-mcp-server/start-mcp
 
 echo ""
 echo "Step 10: Create Sprite service for REST API..."
-sprite-env services create anki-rest --cmd /home/sprite/anki/start-rest-proxy.sh --needs anki 2>/dev/null || echo "Service anki-rest may already exist"
+if sprite-env services list | grep -q '^anki-rest\b'; then
+    echo "Service anki-rest already exists, skipping..."
+else
+    sprite-env services create anki-rest --cmd /home/sprite/anki/start-rest-proxy.sh --needs anki
+fi
 
 # ============================================================================
 # Step 11: Final Restart
