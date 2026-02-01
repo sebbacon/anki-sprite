@@ -111,8 +111,8 @@ if [ -d /home/sprite ]; then
 fi
 mkdir -p ~/anki
 mkdir -p ~/anki/anki_data/.local/share/Anki2
+mkdir -p ~/anki/anki_data/.config/openbox
 mkdir -p ~/.vnc
-mkdir -p ~/.config/openbox
 
 # ============================================================================
 # Step 3: Install Anki
@@ -236,7 +236,8 @@ XSTARTUP
 chmod +x ~/.vnc/xstartup
 
 # Create openbox autostart (this is what actually runs when VNC starts)
-cat > ~/.config/openbox/autostart << 'AUTOSTART'
+# Note: Must be in ~/anki/anki_data/.config/ because XDG_CONFIG_HOME points there
+cat > ~/anki/anki_data/.config/openbox/autostart << 'AUTOSTART'
 # Set keyboard layout
 setxkbmap -layout us &
 
@@ -255,7 +256,7 @@ mkdir -p "$XDG_RUNTIME_DIR"
 sleep 2
 anki &
 AUTOSTART
-chmod +x ~/.config/openbox/autostart
+chmod +x ~/anki/anki_data/.config/openbox/autostart
 
 echo "VNC configuration complete."
 
@@ -303,11 +304,24 @@ cp "${SCRIPTS_DIR}/start-novnc.sh" ~/anki/start-novnc.sh
 chmod +x ~/anki/start-novnc.sh
 
 # ============================================================================
-# Step 8: Install AnkiConnect Addon
+# Step 8: Configure AnkiWeb Credentials (if provided)
 # ============================================================================
 
 echo ""
-echo "Step 8: Install AnkiConnect addon..."
+echo "Step 8: Configure AnkiWeb credentials..."
+if [ -n "$ANKIWEB_USERNAME" ] && [ -n "$ANKIWEB_PASSWORD" ]; then
+    echo "AnkiWeb credentials found, configuring automatic sync..."
+    python3 "${SCRIPTS_DIR}/setup-ankiweb-credentials.py"
+else
+    echo "AnkiWeb credentials not provided, skipping (user can configure manually)."
+fi
+
+# ============================================================================
+# Step 9: Install AnkiConnect Addon
+# ============================================================================
+
+echo ""
+echo "Step 9: Install AnkiConnect addon..."
 mkdir -p ~/anki/anki_data/.local/share/Anki2/addons21/2055492159
 if [ ! -d /tmp/anki-connect ]; then
     echo "Cloning AnkiConnect repository..."
@@ -322,19 +336,41 @@ fi
 cp "${SCRIPTS_DIR}/ankiconnect-config.json" ~/anki/anki_data/.local/share/Anki2/addons21/2055492159/config.json
 
 # ============================================================================
-# Step 9: Create Sprite Services
+# Step 10: Create Sprite Services
 # ============================================================================
 
 echo ""
-echo "Step 9a: Create Sprite service for Anki (VNC)..."
+echo "Step 10a: Create Sprite service for Anki (VNC)..."
 if sprite-env services list | grep -q '^anki\b'; then
     echo "Service anki already exists, skipping..."
 else
     sprite-env services create anki --cmd /home/sprite/anki/start-anki-native.sh
 fi
 
+# Wait for AnkiConnect to be available before creating dependent services
+# This ensures Anki is fully loaded and ready to accept connections
 echo ""
-echo "Step 9b: Create Sprite service for noVNC web interface..."
+echo "Step 10a-wait: Waiting for Anki to fully initialize (this may take 1-2 minutes)..."
+ANKICONNECT_TIMEOUT=180
+for i in $(seq 1 $ANKICONNECT_TIMEOUT); do
+    if curl -s --max-time 2 localhost:8765 -d '{"action":"version","version":6}' 2>/dev/null | grep -q '"result"'; then
+        echo "AnkiConnect is ready (took ${i}s)"
+        break
+    fi
+    if [ $((i % 15)) -eq 0 ]; then
+        echo "Still waiting for AnkiConnect... (${i}/${ANKICONNECT_TIMEOUT}s)"
+    fi
+    sleep 1
+done
+
+# Verify AnkiConnect is responding
+if ! curl -s --max-time 2 localhost:8765 -d '{"action":"version","version":6}' 2>/dev/null | grep -q '"result"'; then
+    echo "WARNING: AnkiConnect not available after ${ANKICONNECT_TIMEOUT}s"
+    echo "Anki may still be initializing. Continuing with service setup..."
+fi
+
+echo ""
+echo "Step 10b: Create Sprite service for noVNC web interface..."
 if sprite-env services list | grep -q '^anki-novnc\b'; then
     echo "Service anki-novnc already exists, skipping..."
 else
@@ -342,7 +378,7 @@ else
 fi
 
 echo ""
-echo "Step 9c: Create Sprite service for Caddy reverse proxy..."
+echo "Step 10c: Create Sprite service for Caddy reverse proxy..."
 if sprite-env services list | grep -q '^anki-caddy\b'; then
     echo "Service anki-caddy already exists, skipping..."
 else
@@ -350,11 +386,11 @@ else
 fi
 
 # ============================================================================
-# Step 10: Set up Anki MCP Server
+# Step 11: Set up Anki MCP Server
 # ============================================================================
 
 echo ""
-echo "Step 10a: Set up Anki MCP Server..."
+echo "Step 11a: Set up Anki MCP Server..."
 if [ ! -d ~/anki-mcp-server ]; then
     git clone https://github.com/sebbacon/anki-mcp-server.git ~/anki-mcp-server
 fi
@@ -363,16 +399,16 @@ npm install
 npm run build
 
 echo ""
-echo "Step 10b: Install supergateway for MCP HTTP transport..."
+echo "Step 11b: Install supergateway for MCP HTTP transport..."
 npm install -g supergateway
 
 echo ""
-echo "Step 10c: Copying MCP server startup script..."
+echo "Step 11c: Copying MCP server startup script..."
 cp "${SCRIPTS_DIR}/start-mcp.sh" ~/anki-mcp-server/start-mcp.sh
 chmod +x ~/anki-mcp-server/start-mcp.sh
 
 echo ""
-echo "Step 10d: Create Sprite service for MCP server..."
+echo "Step 11d: Create Sprite service for MCP server..."
 if sprite-env services list | grep -q '^anki-mcp\b'; then
     echo "Service anki-mcp already exists, skipping..."
 else
@@ -380,11 +416,11 @@ else
 fi
 
 # ============================================================================
-# Step 11: Set up REST API Service
+# Step 12: Set up REST API Service
 # ============================================================================
 
 echo ""
-echo "Step 11: Create Sprite service for REST API..."
+echo "Step 12: Create Sprite service for REST API..."
 if sprite-env services list | grep -q '^anki-rest\b'; then
     echo "Service anki-rest already exists, skipping..."
 else
@@ -392,11 +428,11 @@ else
 fi
 
 # ============================================================================
-# Step 12: Copy Helper Scripts
+# Step 13: Copy Helper Scripts
 # ============================================================================
 
 echo ""
-echo "Step 12: Copying helper scripts..."
+echo "Step 13: Copying helper scripts..."
 cp "${SCRIPTS_DIR}/start-anki.sh" ~/anki/start-anki.sh
 cp "${SCRIPTS_DIR}/stop-anki.sh" ~/anki/stop-anki.sh
 cp "${SCRIPTS_DIR}/status-anki.sh" ~/anki/status-anki.sh

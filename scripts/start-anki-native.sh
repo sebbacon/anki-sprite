@@ -1,6 +1,7 @@
 #!/bin/bash
 # Anki Native Startup Script
 # Starts TigerVNC server with Anki running inside
+# Waits for AnkiConnect to be available before service is considered ready
 
 # Kill any existing VNC server on display :1
 timeout 5 vncserver -kill :1 2>/dev/null || true
@@ -40,6 +41,30 @@ for i in {1..30}; do
     fi
     sleep 1
 done
+
+# Wait for AnkiConnect to be available (Anki takes time to fully initialize)
+# This ensures dependent services don't start until Anki is ready
+echo "Waiting for AnkiConnect to be available on port 8765..."
+ANKICONNECT_TIMEOUT=120
+ANKICONNECT_READY=false
+
+for i in $(seq 1 $ANKICONNECT_TIMEOUT); do
+    # Try to connect to AnkiConnect
+    if curl -s --max-time 2 localhost:8765 -d '{"action":"version","version":6}' 2>/dev/null | grep -q '"result"'; then
+        echo "AnkiConnect is ready (took ${i}s)"
+        ANKICONNECT_READY=true
+        break
+    fi
+
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "Still waiting for AnkiConnect... (${i}/${ANKICONNECT_TIMEOUT}s)"
+    fi
+    sleep 1
+done
+
+if [ "$ANKICONNECT_READY" = false ]; then
+    echo "WARNING: AnkiConnect not available after ${ANKICONNECT_TIMEOUT}s, continuing anyway"
+fi
 
 # Keep the service alive by tailing the VNC log
 exec tail -f /home/sprite/.config/tigervnc/*.log 2>/dev/null || sleep infinity
