@@ -28,9 +28,16 @@ import sys
 import time
 import random
 import json
+import io
 import urllib.request
 import urllib.parse
 import urllib.error
+
+try:
+    import zstandard as zstd
+    HAS_ZSTD = True
+except ImportError:
+    HAS_ZSTD = False
 
 # Configuration
 ANKI_DATA_DIR = os.path.expanduser("~/anki/anki_data/.local/share/Anki2")
@@ -74,16 +81,43 @@ def get_hkey_from_ankiweb(username: str, password: str) -> str:
 
     The hkey is a server-generated token returned by AnkiWeb's hostKey endpoint.
     This is the only way to obtain a valid sync key - it cannot be generated locally.
+
+    Uses the modern Anki sync protocol with zstd compression if available.
     """
     url = "https://sync.ankiweb.net/sync/hostKey"
-    data = urllib.parse.urlencode({"u": username, "p": password}).encode("utf-8")
+    # AnkiWeb expects JSON body with "u" and "p" fields
+    json_data = json.dumps({"u": username, "p": password}).encode("utf-8")
 
-    request = urllib.request.Request(url, data=data, method="POST")
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    if HAS_ZSTD:
+        # Modern protocol: zstd-compressed body with anki-sync header
+        compressor = zstd.ZstdCompressor()
+        data = compressor.compress(json_data)
+
+        request = urllib.request.Request(url, data=data, method="POST")
+        request.add_header("Content-Type", "application/octet-stream")
+        # Header format: v=version, k=key (empty for login), c=client version, s=session
+        sync_header = json.dumps({"v": 11, "k": "", "c": "anki,2.1.65", "s": "setup"})
+        request.add_header("anki-sync", sync_header)
+    else:
+        # Fallback: plain JSON (may not work with newer AnkiWeb servers)
+        data = json_data
+        request = urllib.request.Request(url, data=data, method="POST")
+        request.add_header("Content-Type", "application/json")
 
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            result = json.loads(response.read().decode("utf-8"))
+            response_data = response.read()
+            if HAS_ZSTD:
+                # Try to decompress zstd response, fall back to plain if it fails
+                try:
+                    decompressor = zstd.ZstdDecompressor()
+                    # Use streaming decompression which doesn't require frame size
+                    reader = decompressor.stream_reader(io.BytesIO(response_data))
+                    response_data = reader.read()
+                except Exception:
+                    # Response might not be compressed, try as-is
+                    pass
+            result = json.loads(response_data.decode("utf-8"))
             if "key" not in result:
                 raise ValueError(f"Unexpected response from AnkiWeb: {result}")
             return result["key"]

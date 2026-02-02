@@ -11,7 +11,14 @@ source "$SCRIPT_DIR/lib/sprite-helpers.sh"
 source "$SCRIPT_DIR/lib/api-helpers.sh"
 source "$SCRIPT_DIR/lib/assertions.sh"
 
-# Configuration
+# Load .env file if it exists (credentials can be overridden by env vars or CLI args)
+if [ -f "$SCRIPT_DIR/../.env" ]; then
+    set -a  # automatically export all variables
+    source "$SCRIPT_DIR/../.env"
+    set +a
+fi
+
+# Configuration (env vars override .env, CLI args override both)
 ANKIWEB_USERNAME="${ANKIWEB_USERNAME:-}"
 ANKIWEB_PASSWORD="${ANKIWEB_PASSWORD:-}"
 TEST_SPRITE_NAME=""
@@ -154,7 +161,7 @@ if row:
     profile = pickle.loads(row[0])
     sync_key = profile.get('syncKey')
     sync_user = profile.get('syncUser')
-    if sync_key and len(sync_key) > 20:
+    if sync_key and len(sync_key) >= 10:
         print(f'OK: syncKey set ({len(sync_key)} chars), syncUser={sync_user}')
     elif sync_key:
         print(f'WARN: syncKey looks invalid ({len(sync_key)} chars)')

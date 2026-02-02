@@ -27,11 +27,13 @@ mkdir -p "$XDG_CONFIG_HOME"
 mkdir -p "$XDG_RUNTIME_DIR"
 
 # Start VNC server in background (not using -fg to avoid process management issues)
+# Use -xstartup to ensure our custom startup script is used (not /etc/X11/Xsession)
 vncserver :1 \
     -geometry 1280x720 \
     -depth 24 \
     -localhost yes \
-    -SecurityTypes None
+    -SecurityTypes None \
+    -xstartup ~/.vnc/xstartup
 
 # Wait for VNC to start
 for i in {1..30}; do
@@ -66,5 +68,14 @@ if [ "$ANKICONNECT_READY" = false ]; then
     echo "WARNING: AnkiConnect not available after ${ANKICONNECT_TIMEOUT}s, continuing anyway"
 fi
 
-# Keep the service alive by tailing the VNC log
-exec tail -f /home/sprite/.config/tigervnc/*.log 2>/dev/null || sleep infinity
+# Keep the service alive
+# Use a reliable method that doesn't depend on log files existing
+while true; do
+    # Check if VNC server is still running
+    if [ -S /tmp/.X11-unix/X1 ]; then
+        sleep 10
+    else
+        echo "VNC server stopped, exiting..."
+        exit 1
+    fi
+done

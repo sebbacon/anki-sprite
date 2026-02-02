@@ -125,10 +125,25 @@ sprite_wait_ready() {
 sprite_start_services() {
     local name="$1"
     echo "Starting services on $name..."
-    # Start anki first, then dependent services
+    # Start anki first - this will trigger dependent services via --needs
     sprite exec -s "$name" -- sprite-env services start anki
-    sleep 2
-    sprite exec -s "$name" -- sprite-env services start anki-novnc anki-caddy anki-mcp anki-rest 2>/dev/null || true
+
+    # Wait for AnkiConnect to be ready before starting REST/MCP services
+    # (they need AnkiConnect to be available)
+    echo "Waiting for AnkiConnect to initialize..."
+    for i in {1..60}; do
+        if sprite exec -s "$name" bash -c "curl -s --max-time 2 localhost:8765 -d '{\"action\":\"version\",\"version\":6}' 2>/dev/null | grep -q '\"result\"'" 2>/dev/null; then
+            echo "AnkiConnect ready after ${i}s"
+            break
+        fi
+        sleep 2
+    done
+
+    # Restart dependent services to ensure they reconnect to AnkiConnect
+    sprite exec -s "$name" -- sprite-env services restart anki-novnc 2>/dev/null || true
+    sprite exec -s "$name" -- sprite-env services restart anki-caddy 2>/dev/null || true
+    sprite exec -s "$name" -- sprite-env services restart anki-mcp 2>/dev/null || true
+    sprite exec -s "$name" -- sprite-env services restart anki-rest 2>/dev/null || true
 }
 
 # Stop all services on a sprite

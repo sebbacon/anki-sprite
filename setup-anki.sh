@@ -227,8 +227,8 @@ openbox &
 # Wait a moment for window manager to start
 sleep 2
 
-# Start Anki
-anki &
+# Start Anki with specific profile to skip profile selector
+anki -p "User 1" &
 
 # Keep the session alive
 wait
@@ -252,9 +252,9 @@ export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu"
 
 mkdir -p "$XDG_RUNTIME_DIR"
 
-# Wait for window manager to be ready, then start Anki
+# Wait for window manager to be ready, then start Anki with specific profile
 sleep 2
-anki &
+anki -p "User 1" &
 AUTOSTART
 chmod +x ~/anki/anki_data/.config/openbox/autostart
 
@@ -304,17 +304,16 @@ cp "${SCRIPTS_DIR}/start-novnc.sh" ~/anki/start-novnc.sh
 chmod +x ~/anki/start-novnc.sh
 
 # ============================================================================
-# Step 8: Configure AnkiWeb Credentials (if provided)
+# Step 8: Configure Anki Profile (required to skip first-run wizard)
 # ============================================================================
 
 echo ""
-echo "Step 8: Configure AnkiWeb credentials..."
-if [ -n "$ANKIWEB_USERNAME" ] && [ -n "$ANKIWEB_PASSWORD" ]; then
-    echo "AnkiWeb credentials found, configuring automatic sync..."
-    python3 "${SCRIPTS_DIR}/setup-ankiweb-credentials.py"
-else
-    echo "AnkiWeb credentials not provided, skipping (user can configure manually)."
-fi
+echo "Step 8: Configure Anki profile..."
+# Install zstandard for AnkiWeb authentication (modern sync protocol requires zstd)
+pip3 install -q zstandard 2>/dev/null || pip3 install --user -q zstandard 2>/dev/null || true
+# Always run to create profile with firstRun=False (skips locale dialog)
+# If ANKIWEB_USERNAME and ANKIWEB_PASSWORD are set, also configures sync credentials
+python3 "${SCRIPTS_DIR}/setup-ankiweb-credentials.py"
 
 # ============================================================================
 # Step 9: Install AnkiConnect Addon
