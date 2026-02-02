@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
 """
-Pre-populate Anki's prefs21.db with AnkiWeb credentials.
+Pre-populate Anki's prefs21.db with profile settings and optional AnkiWeb credentials.
 
-This script sets up the sync credentials before Anki's first run,
-allowing automatic sync without user interaction.
+This script sets up the Anki profile before the first run to:
+1. Skip the first-run wizard (locale selection dialog)
+2. Create a default user profile
+3. Optionally configure AnkiWeb sync credentials
 
 Usage:
+    # Always run to set up profile (required to skip first-run wizard):
+    ./setup-ankiweb-credentials.py
+
+    # With AnkiWeb credentials for automatic sync:
     ANKIWEB_USERNAME=user@example.com ANKIWEB_PASSWORD=secret ./setup-ankiweb-credentials.py
 
 The script will:
 1. Create prefs21.db if it doesn't exist
-2. Create a default profile if needed
-3. Set the syncKey (hkey) and syncUser fields
+2. Create _global profile with firstRun=False to skip locale dialog
+3. Create a default user profile
+4. Set syncKey (hkey) and syncUser fields if credentials are provided
 """
 
 import sqlite3
 import pickle
-import hashlib
 import os
 import sys
 import time
 import random
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
 
 # Configuration
 ANKI_DATA_DIR = os.path.expanduser("~/anki/anki_data/.local/share/Anki2")
@@ -58,22 +68,43 @@ DEFAULT_USER_PROFILE = {
 }
 
 
-def generate_hkey(username: str, password: str) -> str:
-    """Generate the sync authentication key (hkey) from credentials."""
-    # The hkey is hex(sha1("username:password"))
-    auth_string = f"{username}:{password}"
-    return hashlib.sha1(auth_string.encode("utf-8")).hexdigest()
+def get_hkey_from_ankiweb(username: str, password: str) -> str:
+    """
+    Get the sync authentication key (hkey) from AnkiWeb server.
+
+    The hkey is a server-generated token returned by AnkiWeb's hostKey endpoint.
+    This is the only way to obtain a valid sync key - it cannot be generated locally.
+    """
+    url = "https://sync.ankiweb.net/sync/hostKey"
+    data = urllib.parse.urlencode({"u": username, "p": password}).encode("utf-8")
+
+    request = urllib.request.Request(url, data=data, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            if "key" not in result:
+                raise ValueError(f"Unexpected response from AnkiWeb: {result}")
+            return result["key"]
+    except urllib.error.HTTPError as e:
+        if e.code == 401 or e.code == 403:
+            raise ValueError("Invalid AnkiWeb username or password") from e
+        raise ValueError(f"AnkiWeb request failed with status {e.code}") from e
+    except urllib.error.URLError as e:
+        raise ValueError(f"Failed to connect to AnkiWeb: {e.reason}") from e
 
 
-def setup_credentials(username: str, password: str) -> bool:
-    """Set up AnkiWeb credentials in the prefs database."""
+def setup_profile(username: str = None, password: str = None) -> bool:
+    """
+    Set up Anki profile in the prefs database.
+
+    Always creates _global profile (with firstRun=False) and user profile.
+    If credentials are provided, also configures AnkiWeb sync.
+    """
 
     # Ensure directory exists
     os.makedirs(ANKI_DATA_DIR, exist_ok=True)
-
-    # Generate the hkey
-    hkey = generate_hkey(username, password)
-    print(f"Generated hkey for {username}")
 
     # Connect to database (creates if doesn't exist)
     conn = sqlite3.connect(PREFS_DB_PATH)
@@ -94,9 +125,11 @@ def setup_credentials(username: str, password: str) -> bool:
         print("Found existing _global profile")
     else:
         global_profile = DEFAULT_GLOBAL_PROFILE.copy()
-        print("Creating new _global profile")
+        print("Creating new _global profile with firstRun=False")
 
-    # Ensure last_loaded_profile_name is set
+    # Ensure critical settings are set
+    global_profile["firstRun"] = False
+    global_profile["defaultLang"] = "en_US"
     global_profile["last_loaded_profile_name"] = PROFILE_NAME
 
     # Save _global profile
@@ -116,11 +149,15 @@ def setup_credentials(username: str, password: str) -> bool:
         user_profile = DEFAULT_USER_PROFILE.copy()
         print(f"Creating new '{PROFILE_NAME}' profile")
 
-    # Set sync credentials
-    user_profile["syncKey"] = hkey
-    user_profile["syncUser"] = username
-    user_profile["autoSync"] = True
-    user_profile["syncMedia"] = True
+    # Set sync credentials if provided
+    if username and password:
+        print(f"Authenticating with AnkiWeb as {username}...")
+        hkey = get_hkey_from_ankiweb(username, password)
+        print(f"Successfully obtained hkey from AnkiWeb")
+        user_profile["syncKey"] = hkey
+        user_profile["syncUser"] = username
+        user_profile["autoSync"] = True
+        user_profile["syncMedia"] = True
 
     # Save user profile
     cursor.execute(
@@ -131,28 +168,33 @@ def setup_credentials(username: str, password: str) -> bool:
     conn.commit()
     conn.close()
 
-    print(f"Successfully configured AnkiWeb credentials in {PREFS_DB_PATH}")
-    print(f"  Username: {username}")
+    print(f"Successfully configured Anki profile in {PREFS_DB_PATH}")
     print(f"  Profile: {PROFILE_NAME}")
-    print(f"  Auto-sync: enabled")
+    print(f"  firstRun: False (will skip locale dialog)")
+    if username:
+        print(f"  AnkiWeb username: {username}")
+        print(f"  Auto-sync: enabled")
+    else:
+        print(f"  AnkiWeb: not configured (user can log in manually)")
 
     return True
 
 
 def main():
-    # Get credentials from environment
+    # Get credentials from environment (optional)
     username = os.environ.get("ANKIWEB_USERNAME", "").strip()
     password = os.environ.get("ANKIWEB_PASSWORD", "").strip()
 
+    # Only use credentials if both are provided
     if not username or not password:
-        print("AnkiWeb credentials not provided (ANKIWEB_USERNAME and/or ANKIWEB_PASSWORD not set)")
-        print("Skipping AnkiWeb credential setup - user will need to log in manually")
-        sys.exit(0)
+        username = None
+        password = None
+        print("AnkiWeb credentials not provided - profile will be created without sync credentials")
 
     try:
-        setup_credentials(username, password)
+        setup_profile(username, password)
     except Exception as e:
-        print(f"Error setting up AnkiWeb credentials: {e}", file=sys.stderr)
+        print(f"Error setting up Anki profile: {e}", file=sys.stderr)
         sys.exit(1)
 
 
