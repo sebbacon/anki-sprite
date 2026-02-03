@@ -93,7 +93,8 @@ sudo apt install -y \
     netcat-openbsd \
     libnss3 \
     libxkbcommon-x11-0 \
-    libxcb-shape0
+    libxcb-shape0 \
+    xdotool
 
 # Ensure locale is set
 sudo locale-gen en_US.UTF-8
@@ -335,11 +336,23 @@ fi
 cp "${SCRIPTS_DIR}/ankiconnect-config.json" ~/anki/anki_data/.local/share/Anki2/addons21/2055492159/config.json
 
 # ============================================================================
-# Step 10: Create Sprite Services
+# Step 10: Copy Helper Scripts (must be before services start)
 # ============================================================================
 
 echo ""
-echo "Step 10a: Create Sprite service for Anki (VNC)..."
+echo "Step 10: Copying helper scripts..."
+cp "${SCRIPTS_DIR}/start-anki.sh" ~/anki/start-anki.sh
+cp "${SCRIPTS_DIR}/stop-anki.sh" ~/anki/stop-anki.sh
+cp "${SCRIPTS_DIR}/status-anki.sh" ~/anki/status-anki.sh
+cp "${SCRIPTS_DIR}/auto-accept-sync.sh" ~/anki/auto-accept-sync.sh
+chmod +x ~/anki/start-anki.sh ~/anki/stop-anki.sh ~/anki/status-anki.sh ~/anki/auto-accept-sync.sh
+
+# ============================================================================
+# Step 11: Create Sprite Services
+# ============================================================================
+
+echo ""
+echo "Step 11a: Create Sprite service for Anki (VNC)..."
 if sprite-env services list | grep -q '^anki\b'; then
     echo "Service anki already exists, skipping..."
 else
@@ -349,7 +362,7 @@ fi
 # Wait for AnkiConnect to be available before creating dependent services
 # This ensures Anki is fully loaded and ready to accept connections
 echo ""
-echo "Step 10a-wait: Waiting for Anki to fully initialize (this may take 1-2 minutes)..."
+echo "Step 11a-wait: Waiting for Anki to fully initialize (this may take 1-2 minutes)..."
 ANKICONNECT_TIMEOUT=180
 for i in $(seq 1 $ANKICONNECT_TIMEOUT); do
     if curl -s --max-time 2 localhost:8765 -d '{"action":"version","version":6}' 2>/dev/null | grep -q '"result"'; then
@@ -369,7 +382,7 @@ if ! curl -s --max-time 2 localhost:8765 -d '{"action":"version","version":6}' 2
 fi
 
 echo ""
-echo "Step 10b: Create Sprite service for noVNC web interface..."
+echo "Step 11b: Create Sprite service for noVNC web interface..."
 if sprite-env services list | grep -q '^anki-novnc\b'; then
     echo "Service anki-novnc already exists, skipping..."
 else
@@ -377,7 +390,7 @@ else
 fi
 
 echo ""
-echo "Step 10c: Create Sprite service for Caddy reverse proxy..."
+echo "Step 11c: Create Sprite service for Caddy reverse proxy..."
 if sprite-env services list | grep -q '^anki-caddy\b'; then
     echo "Service anki-caddy already exists, skipping..."
 else
@@ -385,11 +398,11 @@ else
 fi
 
 # ============================================================================
-# Step 11: Set up Anki MCP Server
+# Step 12: Set up Anki MCP Server
 # ============================================================================
 
 echo ""
-echo "Step 11a: Set up Anki MCP Server..."
+echo "Step 12a: Set up Anki MCP Server..."
 if [ ! -d ~/anki-mcp-server ]; then
     git clone https://github.com/sebbacon/anki-mcp-server.git ~/anki-mcp-server
 fi
@@ -398,16 +411,16 @@ npm install
 npm run build
 
 echo ""
-echo "Step 11b: Install supergateway for MCP HTTP transport..."
+echo "Step 12b: Install supergateway for MCP HTTP transport..."
 npm install -g supergateway
 
 echo ""
-echo "Step 11c: Copying MCP server startup script..."
+echo "Step 12c: Copying MCP server startup script..."
 cp "${SCRIPTS_DIR}/start-mcp.sh" ~/anki-mcp-server/start-mcp.sh
 chmod +x ~/anki-mcp-server/start-mcp.sh
 
 echo ""
-echo "Step 11d: Create Sprite service for MCP server..."
+echo "Step 12d: Create Sprite service for MCP server..."
 if sprite-env services list | grep -q '^anki-mcp\b'; then
     echo "Service anki-mcp already exists, skipping..."
 else
@@ -419,23 +432,12 @@ fi
 # ============================================================================
 
 echo ""
-echo "Step 12: Create Sprite service for REST API..."
+echo "Step 13: Create Sprite service for REST API..."
 if sprite-env services list | grep -q '^anki-rest\b'; then
     echo "Service anki-rest already exists, skipping..."
 else
     sprite-env services create anki-rest --cmd /home/sprite/anki/start-rest-proxy.sh --needs anki
 fi
-
-# ============================================================================
-# Step 13: Copy Helper Scripts
-# ============================================================================
-
-echo ""
-echo "Step 13: Copying helper scripts..."
-cp "${SCRIPTS_DIR}/start-anki.sh" ~/anki/start-anki.sh
-cp "${SCRIPTS_DIR}/stop-anki.sh" ~/anki/stop-anki.sh
-cp "${SCRIPTS_DIR}/status-anki.sh" ~/anki/status-anki.sh
-chmod +x ~/anki/start-anki.sh ~/anki/stop-anki.sh ~/anki/status-anki.sh
 
 # ============================================================================
 # Complete

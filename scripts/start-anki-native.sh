@@ -44,6 +44,13 @@ for i in {1..30}; do
     sleep 1
 done
 
+# Start auto-accept sync dialog watcher in background
+# This watches for the initial AnkiWeb sync dialog and auto-accepts "Download"
+if [ -x ~/anki/auto-accept-sync.sh ]; then
+    echo "Starting auto-accept sync watcher..."
+    ~/anki/auto-accept-sync.sh &
+fi
+
 # Wait for AnkiConnect to be available (Anki takes time to fully initialize)
 # This ensures dependent services don't start until Anki is ready
 echo "Waiting for AnkiConnect to be available on port 8765..."
